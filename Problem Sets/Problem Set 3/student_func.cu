@@ -80,10 +80,14 @@
   steps.
 
 */
-#include "reference_calc.cpp"
+
+
 #include "utils.h"
 
-__global__ void minReduce(float *d_out, float *d_logLuminance)
+#include <iostream>
+
+
+__global__ void minReduce(const float* const d_logLuminance, float* d_out)
 {
     extern __shared__ float sharedData[];
     int myId = threadIdx.x + blockDim.x * blockIdx.x;
@@ -96,9 +100,8 @@ __global__ void minReduce(float *d_out, float *d_logLuminance)
     {
         if (tid < i)
         {
-            sharedData[tid] += min(sharedData[tid], sharedData[tid + i]);
+            sharedData[tid] = min(sharedData[tid], sharedData[tid + i]);
         }
-        
         __syncthreads();
     }
     
@@ -110,7 +113,7 @@ __global__ void minReduce(float *d_out, float *d_logLuminance)
 }
 
 
-__global__ void maxReduce(float *d_out, float *d_logLuminance)
+__global__ void maxReduce(const float* const d_logLuminance, float* d_out)
 {
     extern __shared__ float sharedData[];
     int myId = threadIdx.x + blockDim.x * blockIdx.x;
@@ -123,7 +126,7 @@ __global__ void maxReduce(float *d_out, float *d_logLuminance)
     {
         if (tid < i)
         {
-            sharedData[tid] += max(sharedData[tid], sharedData[tid + i]);
+            sharedData[tid] = max(sharedData[tid], sharedData[tid + i]);
         }
         
         __syncthreads();
@@ -136,6 +139,9 @@ __global__ void maxReduce(float *d_out, float *d_logLuminance)
         
 }
 
+/*
+   to simplify kernel calls for max and min, 
+    will implement when running example is done
 
 void reduceMaxMin(float * d_out, float * d_intermediate, float * d_in, int size)
 {
@@ -154,15 +160,43 @@ void reduceMaxMin(float * d_out, float * d_intermediate, float * d_in, int size)
         (d_out, d_intermediate);
     
 }
-     
-__global__ void histo(int *d_bins, const int *d_in, const int BIN_COUNT)
+*/     
+
+__global__ void histo(const float * const d_logLuminance, unsigned int *d_hist, float minv, const float range, const int BIN_COUNT)
 {
-    int myId = threadIdx.x + blockDim.x * blockIdx.x;
-    int myItem = d_in[myId];
-    int myBin = myItem % BIN_COUNT;
-    atomicAdd(&(d_bins[myBin]), 1);
+    int myId = threadIdx.x + blockIdx.x * blockDim.x;
+    int myItem = d_logLuminance[myId];
+    int myBin = (myItem - minv) / range * BIN_COUNT;
+    atomicAdd(&(d_hist[myBin]), 1);
 }
 
+
+
+__global__ void exclusiveScan(unsigned int * d_hist, unsigned int * const d_cdf, const int BIN_COUNT)
+{
+    extern __shared__ unsigned int tmp[];
+    
+    int tid = threadIdx.x;
+    
+    tmp[tid] = (tid > 0) ? d_hist[tid - 1] : 0;
+    __syncthreads();
+    
+    for(int offset = 1; offset < BIN_COUNT; offset *= 2)
+    {
+        unsigned int lv = tmp[tid];
+        __syncthreads();
+        
+        if(tid + offset < BIN_COUNT)
+        {
+            tmp[tid + offset] += lv;
+        }
+        __syncthreads();
+        
+    }
+    
+    d_cdf[tid] = tmp[tid];
+    
+}
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -186,46 +220,41 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
   */
 
 
-    float * d_tempReduce, * d_min, * d_max;
+    float* d_tempReduce, *d_min, *d_max;
     
     cudaMalloc((void**)&d_tempReduce, sizeof(float) * numRows * numCols);
-    cudaMalloc((void**)&d_min, sizeof(float) * numRows * numCols);    
-    cudaMalloc((void**)&d_max, sizeof(float) * numRows * numCols);
+    cudaMalloc((void**)&d_min, sizeof(float));    
+    cudaMalloc((void**)&d_max, sizeof(float));
 
 
-    const int threadsPerBlock = 1024;
+    int threadsPerBlock = 512;
     
-    minReduce<<<numRows * numCols / threadsPerBlock, threadsPerBlock, threadsPerBlock * sizeof(float)>>>
-        (d_logLuminance, d_tempReduce);
-    minReduce<<<1, numRows * numCols / threadsPerBlock, sizeof(float) * numRows * numCols / threadsPerBlock>>>
-        (d_tempReduce, d_min);
+    minReduce<<<numRows * numCols / threadsPerBlock, threadsPerBlock, threadsPerBlock * sizeof(float)>>>(d_logLuminance, d_tempReduce);
+    minReduce<<<1, numRows * numCols / threadsPerBlock, sizeof(float) * numRows * numCols / threadsPerBlock>>>(d_tempReduce, d_min);
     
     
-    cudaMemcpy(&min_logLum, d_min, sizeof(float), cudaMemcpyDevicetoHost);
-    cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDevicetoHost);
+    maxReduce<<<numRows * numCols / threadsPerBlock, threadsPerBlock, threadsPerBlock * sizeof(float)>>>(d_logLuminance, d_tempReduce);
+    maxReduce<<<1, numRows * numCols / threadsPerBlock, sizeof(float) * numRows * numCols / threadsPerBlock>>>(d_tempReduce, d_max);
     
-    // 
+    cudaMemcpy(&min_logLum, d_min, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost);
+    
+     
     float range = max_logLum - min_logLum;
     
     
     // now the histogram can be computed
-    unsigned int * d_hist, * h_hist;
+    unsigned int* d_hist, *h_hist;
     
     cudaMalloc((void**)&d_hist, sizeof(unsigned int) * numBins);
-    cudaMemset(d_hist, 0, sizeof(unsigned int)*numBins);
+    cudaMemset(d_hist, 0, sizeof(int)*numBins);
     
     histo<<<numRows * numCols / threadsPerBlock, threadsPerBlock>>>
         (d_logLuminance, d_hist, min_logLum, range, numBins);
     
     
-    
-    
-    
-    
-    
-    
-            
-
+    exclusiveScan<<<1, 1024, sizeof(unsigned int) * 1024>>>
+        (d_hist, d_cdf, numBins);
 
 
 

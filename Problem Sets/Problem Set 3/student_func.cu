@@ -1,3 +1,5 @@
+//@@ Started on:    2015 March 21
+//@@ Completed on:  2015 ...
 /* Udacity Homework 3
    HDR Tone-mapping
 
@@ -78,8 +80,59 @@
   steps.
 
 */
-
+#include "reference_calc.cpp"
 #include "utils.h"
+
+__global__ void reduce_kernel(float *d_out, float *d_in)
+{
+    extern __shared__ float sharedData[];
+    int myId = threadIdx.x + blockDim.x * blockIdx.x;
+    int tid = threadIdx.x;            
+    
+    sharedData[tid] = d_in[myId];
+    __syncthreads();
+    
+    for(unsigned int i = blockDim.x / 2; i > 0; i >>= 1)
+    {
+        if (tid < i)
+        {
+            sharedData[tid] += sharedData[tid + i];
+        }
+        
+        __syncthreads();
+    }
+    
+    if (tid == 0)
+    {
+        d_out[blockIdx.x] = sharedData[0];
+    }
+    
+
+        
+        
+}
+
+
+void reduce(float * d_out, float * d_intermediate, float * d_in, int size)
+{
+    const int maxThreadsPerBlock = 1024;
+    int threads = maxThreadsPerBlock;
+    int blocks = size / maxThreadsPerBlock;
+    
+    reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
+        (d_intermediate, d_in);
+    
+    
+    threads = blocks;
+    blocks = 1;
+    
+    reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
+        (d_out, d_intermediate);
+    
+}
+     
+
+
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,

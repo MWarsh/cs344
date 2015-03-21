@@ -113,6 +113,8 @@ __global__ void minReduce(const float* const d_logLuminance, float* d_out)
 }
 
 
+
+
 __global__ void maxReduce(const float* const d_logLuminance, float* d_out)
 {
     extern __shared__ float sharedData[];
@@ -139,6 +141,7 @@ __global__ void maxReduce(const float* const d_logLuminance, float* d_out)
         
 }
 
+
 /*
    to simplify kernel calls for max and min, 
     will implement when running example is done
@@ -162,14 +165,14 @@ void reduceMaxMin(float * d_out, float * d_intermediate, float * d_in, int size)
 }
 */     
 
+
 __global__ void histo(const float * const d_logLuminance, unsigned int *d_hist, float minv, const float range, const int BIN_COUNT)
 {
     int myId = threadIdx.x + blockIdx.x * blockDim.x;
-    int myItem = d_logLuminance[myId];
+    float myItem = d_logLuminance[myId];
     int myBin = (myItem - minv) / range * BIN_COUNT;
     atomicAdd(&(d_hist[myBin]), 1);
 }
-
 
 
 __global__ void exclusiveScan(unsigned int * d_hist, unsigned int * const d_cdf, const int BIN_COUNT)

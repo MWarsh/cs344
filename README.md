@@ -3,7 +3,11 @@ cs344
 
 Introduction to Parallel Programming class code
 
-# Building on OS X
+### Personal Use
+For keeping Homework code synced across my computers 
+
+
+### Building on OS X
 
 These instructions are for OS X 10.9 "Mavericks".
 
